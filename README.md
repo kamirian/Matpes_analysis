@@ -108,14 +108,14 @@ MatPES_force_analysis/
 │  ── Analysis notebooks ──
 ├── analysis/
 │   ├── pbe_matpes.ipynb          # PBE analysis: MatPES & rattled-1000
-│   ├── r2scan.ipynb              # r2SCAN analysis
+│   ├── r2scan_matpes.ipynb       # r2SCAN analysis
 │   └── omat24_rattled.ipynb      # OMAT24 rattled-1000 analysis
 │
-│  ── HPC job generators (re-run evaluations on cluster) ──
-├── hpc/
-│   ├── run_pbe.ipynb             # MatPES-PBE SLURM generator
-│   ├── run_r2scan.ipynb          # MatPES-r2SCAN SLURM generator
-│   └── run_omat24_rattled.ipynb  # Rattled-1000 SLURM generator
+│  ── Dataset chunking & HPC job generators ──
+├── generate/
+│   ├── run_pbe.ipynb             # MatPES-PBE: chunk dataset + SLURM generator
+│   ├── run_r2scan.ipynb          # MatPES-r2SCAN: chunk dataset + SLURM generator
+│   └── run_omat24_rattled.ipynb  # OMAT24 Rattled-1000: chunk dataset + SLURM generator
 │
 │  ── Python utility modules ──
 ├── scripts/
@@ -129,6 +129,11 @@ MatPES_force_analysis/
 │   ├── all_dfs.json                             # Per-structure metadata (32 KB)
 │   ├── R2SCAN/                                  # Per-model r2SCAN results (~520 MB each — Git LFS)
 │   └── rattled_1000_results/                    # Per-model rattled-1000 results (~280 MB each — Git LFS)
+│
+│  ── Example: custom dataset (LYC) ──
+├── examples/lyc/
+│   ├── analysis_lyc.ipynb        # Force-error analysis on LYC models (fine-tuned vs from-scratch)
+│   └── results/                  # Per-model result JSONs (~39 MB each — Git LFS)
 │
 ├── docs/index.html
 └── requirements.txt
@@ -201,17 +206,63 @@ All notebooks use relative paths from their subdirectory — run them from `anal
 
 ---
 
-## HPC Job Generators
+## Dataset Chunking & Job Generators
 
-The generator notebooks in `hpc/` produce SLURM scripts for re-running MLIP evaluations on a cluster. They are **not needed to reproduce the analysis** — only to regenerate raw result JSON files.
+The notebooks in `generate/` handle two things: (1) splitting a large dataset into chunks suitable for parallel HPC evaluation, and (2) generating self-contained SLURM job scripts for each MLIP × chunk combination. They are **not needed to reproduce the analysis** — only to regenerate raw result JSON files or evaluate on a new dataset.
 
-| Notebook | Dataset | Output |
-|----------|---------|--------|
-| `hpc/run_pbe.ipynb` | MatPES-PBE | `all_results_{mlip}_PBE.json` |
-| `hpc/run_r2scan.ipynb` | MatPES-r2SCAN | `all_results_{mlip}_r2SCAN.json` |
-| `hpc/run_omat24_rattled.ipynb` | Rattled-1000 | `all_results_{mlip}_PBE.json` |
+| Notebook | Dataset used | Output |
+|----------|-------------|--------|
+| `generate/run_pbe.ipynb` | MatPES-PBE (`.json.gz`) | `all_results_{mlip}_PBE.json` |
+| `generate/run_r2scan.ipynb` | MatPES-r2SCAN (`.json.gz`) | `all_results_{mlip}_r2SCAN.json` |
+| `generate/run_omat24_rattled.ipynb` | OMAT24 Rattled-1000 (`.tar.gz` / `.aselmdb`) | `all_results_{mlip}_PBE.json` |
 
-Workflow: chunk dataset → generate scripts → `rsync` to cluster → `bash mass_submit.sh` → merge outputs.
+### General-purpose pipeline — works for any dataset
+
+The chunking and job-generation pipeline is dataset-agnostic. It requires only that each structure has **atomic forces** and a **crystal structure** (positions + lattice). The workflow is:
+
+```
+1. Set CHUNK_DATASET_PATH, CHUNK_BASE_DIR, CHUNK_N in the notebook
+2. Run the chunking cell → writes chunk00/…/chunkNN as compressed JSON
+3. Run the SLURM generator cell → writes code_chunk_*/ directories + mass_submit.sh
+4. rsync the generate/ output to your cluster
+5. bash mass_submit.sh   (submits one job per MLIP × chunk)
+6. Merge chunk outputs → single all_results_{mlip}.json per model
+```
+
+#### Supported input formats
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| MatPES / generic JSON | `.json` | Must contain a list of entries with `forces`, `energy`, `structure` |
+| Compressed JSON | `.json.gz` | Same schema, gzip-compressed |
+| Extended XYZ | `.xyz` | Parsed with ASE; label inferred from filename |
+| OMAT24 LMDB | `.tar.gz` / `.aselmdb` | Requires `ase-db-backends`; extracted automatically |
+
+#### Key configuration parameters
+
+```python
+CHUNK_DATASET_PATH = "/path/to/your_dataset.xyz"   # input file
+CHUNK_BASE_DIR     = "/path/to/chunks/"             # where chunks are written
+CHUNK_N            = 20        # number of parallel chunks (= number of SLURM jobs per model)
+CHUNK_FUNCTIONAL   = None      # label prefix for chunk filenames; None → inferred from file/data
+CHUNK_N_MAX        = None      # cap total entries (None = use all)
+```
+
+Set `CHUNK_N` to the number of parallel jobs you want per MLIP. Each chunk gets its own SLURM script. `CHUNK_FUNCTIONAL` is used as a filename prefix (e.g. `"pbe"`, `"r2scan"`, `"lyc"`); if `None`, it is inferred from the `functional` field in the data or from the filename.
+
+### Example: LYC dataset
+
+The LYC dataset (Li–Y–Cl solid electrolyte) is an `.xyz` file. To evaluate a fine-tuned MACE model on it:
+
+```python
+CHUNK_DATASET_PATH = "/path/to/full_dataset_corrected.xyz"
+CHUNK_BASE_DIR     = "/path/to/LYC_chunks/"
+CHUNK_N            = 5          # small dataset → 5 chunks is enough
+CHUNK_FUNCTIONAL   = None       # inferred as "full_dataset" from filename
+CHUNK_N_MAX        = None
+```
+
+The resulting analysis (force errors of MACE-MP0 baseline vs. fine-tuned variants at different training sizes) is in `examples/lyc/analysis_lyc.ipynb`, with pre-computed results in `examples/lyc/results/`.
 
 ---
 

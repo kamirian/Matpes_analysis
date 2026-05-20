@@ -2,3 +2,4 @@
 # Run `git lfs install` then `git lfs track` before your first commit.
 data/R2SCAN/*.json filter=lfs diff=lfs merge=lfs -text
 data/rattled_1000_results/*.json filter=lfs diff=lfs merge=lfs -text
+examples/lyc/results/*.json filter=lfs diff=lfs merge=lfs -text
